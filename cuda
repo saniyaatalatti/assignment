@@ -1,1 +1,198 @@
+%%writefile h4.cu
+#include <stdio.h>
+#include <stdlib.h>
+#include <cuda_runtime.h>
 
+_global_
+void add(int* A, int* B, int* C, int size) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid < size) {
+        C[tid] = A[tid] + B[tid];
+    }
+}
+
+_global_
+void multiply(int* A, int* B, int* C, int size) {
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (row < size && col < size) {
+        int sum = 0;
+        for (int i = 0; i < size; i++) {
+            sum += A[row * size + i] * B[i * size + col];
+        }
+        C[row * size + col] = sum;
+    }
+}
+
+void checkCUDAError(const char* msg) {
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        fprintf(stderr, "CUDA error in %s: %s\n", msg, cudaGetErrorString(err));
+        exit(-1);
+    }
+}
+
+void initializeVector(int* vector, int size) {
+    for (int i = 0; i < size; i++) {
+        vector[i] = rand() % 10;
+    }
+}
+
+void initializeMatrix(int* matrix, int size) {
+    for (int i = 0; i < size * size; i++) {
+        matrix[i] = rand() % 10;
+    }
+}
+
+void printVector(int* vector, int size) {
+    for (int i = 0; i < size; i++) {
+        printf("%d ", vector[i]);
+    }
+    printf("\n");
+}
+
+void printMatrix(int* matrix, int size) {
+    for (int row = 0; row < size; row++) {
+        for (int col = 0; col < size; col++) {
+            printf("%d ", matrix[row * size + col]);
+        }
+        printf("\n");
+    }
+    printf("\n");
+}
+
+// Sequential CPU version
+void sequentialAdd(int* A, int* B, int* C, int size) {
+    for (int i = 0; i < size; i++) {
+        C[i] = A[i] + B[i];
+    }
+}
+
+void sequentialMultiply(int* A, int* B, int* C, int size) {
+    for (int row = 0; row < size; row++) {
+        for (int col = 0; col < size; col++) {
+            int sum = 0;
+            for (int k = 0; k < size; k++) {
+                sum += A[row * size + k] * B[k * size + col];
+            }
+            C[row * size + col] = sum;
+        }
+    }
+}
+
+int main() {
+    int N;
+    printf("Enter matrix size (N x N): ");
+    scanf("%d", &N);
+
+    // Vector addition
+    int* A = (int*)malloc(N * sizeof(int));
+    int* B = (int*)malloc(N * sizeof(int));
+    int* C_gpu = (int*)malloc(N * sizeof(int));
+    int* C_cpu = (int*)malloc(N * sizeof(int));
+    initializeVector(A, N);
+    initializeVector(B, N);
+
+    printf("Enter elements for Vector A:\n");
+    for (int i = 0; i < N; i++) {
+        printf("Enter element %d: ", i + 1);
+        scanf("%d", &A[i]);
+    }
+
+    printf("Enter elements for Vector B:\n");
+    for (int i = 0; i < N; i++) {
+        printf("Enter element %d: ", i + 1);
+        scanf("%d", &B[i]);
+    }
+
+    printf("Vector A: ");
+    printVector(A, N);
+    printf("Vector B: ");
+    printVector(B, N);
+
+    // Sequential addition
+    sequentialAdd(A, B, C_cpu, N);
+    printf("Sequential Addition: ");
+    printVector(C_cpu, N);
+
+    // Parallel addition using CUDA
+    int *d_A, *d_B, *d_C;
+    cudaMalloc(&d_A, N * sizeof(int));
+    cudaMalloc(&d_B, N * sizeof(int));
+    cudaMalloc(&d_C, N * sizeof(int));
+
+    cudaMemcpy(d_A, A, N * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_B, B, N * sizeof(int), cudaMemcpyHostToDevice);
+
+    int threadsPerBlock = 256;
+    int blocksPerGrid = (N + threadsPerBlock - 1) / threadsPerBlock;
+
+    add<<<blocksPerGrid, threadsPerBlock>>>(d_A, d_B, d_C, N);
+    checkCUDAError("CUDA addition");
+
+    cudaMemcpy(C_gpu, d_C, N * sizeof(int), cudaMemcpyDeviceToHost);
+
+    printf("CUDA Addition: ");
+    printVector(C_gpu, N);
+
+    cudaFree(d_A); cudaFree(d_B); cudaFree(d_C);
+    free(A); free(B); free(C_gpu); free(C_cpu);
+
+    // Matrix multiplication
+    int* D = (int*)malloc(N * N * sizeof(int));
+    int* E = (int*)malloc(N * N * sizeof(int));
+    int* F_gpu = (int*)malloc(N * N * sizeof(int));
+    int* F_cpu = (int*)malloc(N * N * sizeof(int));
+
+    printf("\nEnter elements for Matrix D:\n");
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < N; j++) {
+            printf("Enter element [%d][%d]: ", i + 1, j + 1);
+            scanf("%d", &D[i * N + j]);
+        }
+    }
+
+    printf("Enter elements for Matrix E:\n");
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < N; j++) {
+            printf("Enter element [%d][%d]: ", i + 1, j + 1);
+            scanf("%d", &E[i * N + j]);
+        }
+    }
+
+    printf("\nMatrix D:\n");
+    printMatrix(D, N);
+    printf("Matrix E:\n");
+    printMatrix(E, N);
+
+    // Sequential multiplication
+    sequentialMultiply(D, E, F_cpu, N);
+    printf("Sequential Multiplication:\n");
+    printMatrix(F_cpu, N);
+
+    // CUDA matrix multiplication
+    int *d_D, *d_E, *d_F;
+    cudaMalloc(&d_D, N * N * sizeof(int));
+    cudaMalloc(&d_E, N * N * sizeof(int));
+    cudaMalloc(&d_F, N * N * sizeof(int));
+
+    cudaMemcpy(d_D, D, N * N * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_E, E, N * N * sizeof(int), cudaMemcpyHostToDevice);
+
+    dim3 threads(2, 2);
+    dim3 blocks((N + threads.x - 1) / threads.x, (N + threads.y - 1) / threads.y);
+
+    multiply<<<blocks, threads>>>(d_D, d_E, d_F, N);
+    checkCUDAError("CUDA multiplication");
+
+    cudaMemcpy(F_gpu, d_F, N * N * sizeof(int), cudaMemcpyDeviceToHost);
+
+    printf("CUDA Multiplication:\n");
+    printMatrix(F_gpu, N);
+
+    cudaFree(d_D); cudaFree(d_E); cudaFree(d_F);
+    free(D); free(E); free(F_gpu); free(F_cpu);
+
+    return 0;
+}
